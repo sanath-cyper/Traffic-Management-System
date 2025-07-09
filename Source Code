@@ -1,0 +1,203 @@
+import cv2
+from ultralytics import YOLO
+import os
+import openrouteservice
+import random
+
+# Initialize OpenRouteService client
+ors_client = openrouteservice.Client(key='5b3ce3597851110001cf6248af5b9b2f2cb3450a9645059b3017a646')
+
+# Example coordinates for demo (longitude, latitude) from different cities
+locations = [
+    # Bangalore, India (MG Road to Brigade Road)
+    (77.6066, 12.9758),  # MG Road
+    (77.6081, 12.9732),  # Brigade Road
+
+    # Paris, France (Arc de Triomphe to Eiffel Tower)
+    (2.2950, 48.8738),   # Arc de Triomphe
+    (2.2945, 48.8584),   # Eiffel Tower
+
+    # London, UK (Trafalgar Square to London Eye)
+    (-0.1281, 51.5080),  # Trafalgar Square
+    (-0.1195, 51.5033),  # London Eye
+
+    # New York, USA (Times Square to Central Park)
+    (-73.9855, 40.7580), # Times Square
+    (-73.9680, 40.7851), # Central Park
+
+    # Tokyo, Japan (Shibuya Crossing to Tokyo Tower)
+    (139.7004, 35.6595), # Shibuya Crossing
+    (139.7454, 35.6586), # Tokyo Tower
+
+    # Sydney, Australia (Opera House to Harbour Bridge)
+    (151.2153, -33.8572), # Sydney Opera House
+    (151.2108, -33.8523), # Sydney Harbour Bridge
+
+    # Berlin, Germany (Brandenburg Gate to Alexanderplatz)
+    (13.3777, 52.5163),  # Brandenburg Gate
+    (13.4132, 52.5219),  # Alexanderplatz
+
+    # Moscow, Russia (Red Square to Gorky Park)
+    (37.6208, 55.7539),  # Red Square
+    (37.6034, 55.7308),  # Gorky Park
+
+    # Shanghai, China (The Bund to People's Square)
+    (121.4903, 31.2410), # The Bund
+    (121.4752, 31.2304), # People's Square
+
+    # Buenos Aires, Argentina (Obelisco to Plaza de Mayo)
+    (-58.3816, -34.6037), # Obelisco
+    (-58.3732, -34.6081), # Plaza de Mayo
+]
+
+def get_route_suggestion(start_coords, end_coords):
+    try:
+        routes = ors_client.directions(
+            coordinates=[start_coords, end_coords],
+            profile='driving-car',
+            format='geojson'
+        )
+        summary = routes['features'][0]['properties']['summary']
+        distance_km = summary['distance'] / 1000
+        duration_min = summary['duration'] / 60
+        return f"{distance_km:.2f} km, {duration_min:.1f} min"
+    except Exception as e:
+        return "Route unavailable"
+
+# Function to draw text with a semi-transparent background
+def draw_text_with_background(img, text, pos, font, scale, text_color, bg_color, thickness=2, alpha=0.3):
+    (text_w, text_h), baseline = cv2.getTextSize(text, font, scale, thickness)
+    x, y = pos
+    # Draw background rectangle
+    overlay = img.copy()
+    cv2.rectangle(overlay, (x, y - text_h - baseline), (x + text_w, y + baseline), bg_color, -1)
+    # Blend with the original image
+    cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
+    # Draw text
+    cv2.putText(img, text, (x, y), font, scale, text_color, thickness, cv2.LINE_AA)
+
+# Load YOLOv8 model (or YOLOv5 if you prefer)
+model = YOLO('yolov8n.pt')  # Use 'yolov5s.pt' for YOLOv5
+
+video_folder = r'D:\CNN files\medical bot\Videos'
+video_files = [f for f in os.listdir(video_folder) if f.endswith(('.mp4', '.avi', '.mov'))]
+
+# Example alternate routes (customize as needed)
+alternate_routes = [
+    "Route A: Main St → 2nd Ave → Oak Rd",
+    "Route B: Main St → 3rd Ave → Pine Rd",
+    "Route C: Main St → 4th Ave → Maple Rd"
+]
+
+for video_file in video_files:
+    video_path = os.path.join(video_folder, video_file)
+    print(f"\nProcessing {video_file}...")
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"Error: Could not open {video_file}")
+        continue
+
+    # Set a threshold for congestion
+    CONGESTION_THRESHOLD = 0
+
+    # Set default and congested green light durations (in seconds)
+    DEFAULT_GREEN_DURATION = 30
+    CONGESTED_GREEN_DURATION = 60
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Run YOLO inference
+        results = model(frame)
+
+        # Draw results on frame
+        annotated_frame = results[0].plot()
+
+        # After results = model(frame)
+        vehicle_classes = [2, 3, 5, 7]  # COCO: car, motorcycle, bus, truck
+        vehicle_count = 0
+
+        for box in results[0].boxes:
+            cls = int(box.cls[0])
+            if cls in vehicle_classes:
+                vehicle_count += 1
+
+        print(f"Vehicles detected: {vehicle_count}")
+
+        # After vehicle_count is calculated
+        if vehicle_count > CONGESTION_THRESHOLD:
+            congestion_status = "CONGESTED"
+            status_color = (255, 255, 255)
+            status_bg = (0, 0, 255)  # Red
+            green_light_duration = CONGESTED_GREEN_DURATION
+            suggested_route = random.choice(alternate_routes)
+            print(f"Congestion detected! Suggested alternate route: {suggested_route}")
+            # Display on frame
+            draw_text_with_background(
+                annotated_frame,
+                f"Status: {congestion_status}",
+                (10, 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                status_color,
+                status_bg,
+                thickness=2,
+                alpha=0.3
+            )
+
+            # Pick two random locations for route suggestion
+            start, end = random.sample(locations, 2)
+            print(f"Requesting route from {start} to {end} ...")
+            route_info = get_route_suggestion(start, end)
+            print(f"Route info: {route_info}")
+
+            suggestion_text = f"Route: {route_info}"
+        else:
+            congestion_status = "Clear"
+            status_color = (0, 0, 0)
+            status_bg = (0, 255, 0)  # Green
+            green_light_duration = DEFAULT_GREEN_DURATION
+            suggested_route = ""
+            suggestion_text = ""
+
+        # Display suggested green light duration on the frame
+        draw_text_with_background(
+            annotated_frame,
+            f"Green Light: {green_light_duration}s",
+            (10, 65),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 0, 0),
+            (0, 255, 255),
+            thickness=1,
+            alpha=0.3
+        )
+
+        if suggested_route:
+            draw_text_with_background(
+                annotated_frame,
+                f"Suggestion: {suggested_route}",
+                (10, 95),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 0, 0),
+                (0, 255, 255),
+                thickness=1,
+                alpha=0.3
+            )
+
+        # Optionally, print to console
+        print(f"Suggested Green Light Duration: {green_light_duration} seconds")
+
+        # Show frame
+        cv2.imshow('Traffic Detection', annotated_frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    print(f"Total vehicles detected in {video_file}: {vehicle_count}")
+
+cv2.destroyAllWindows()
